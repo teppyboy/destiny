@@ -1,0 +1,5 @@
+/target
+
+# Destiny-specific files
+.env
+config.toml
