@@ -1,10 +1,11 @@
+use poise::CreateReply;
 use serenity::all::ChannelId;
 use serenity::builder::{CreateEmbed, CreateEmbedFooter, CreateMessage};
 use serenity::client::Context;
 use serenity::model::Color;
 use tracing::error;
 
-pub async fn crate_embed(
+pub async fn create_embed(
     client: &Context,
     title: Option<String>,
     description: Option<String>,
@@ -30,7 +31,7 @@ pub async fn error_embed(
     if title.is_none() {
         title = Some("Error".to_string());
     }
-    return crate_embed(client, title, description, Color::RED).await;
+    return create_embed(client, title, description, Color::RED).await;
 }
 
 pub async fn info_embed(
@@ -41,7 +42,7 @@ pub async fn info_embed(
     if title.is_none() {
         title = Some("Info".to_string());
     }
-    return crate_embed(client, title, description, Color::DARK_GREEN).await;
+    return create_embed(client, title, description, Color::DARK_GREEN).await;
 }
 
 pub async fn error_message(
@@ -64,6 +65,12 @@ pub async fn error_message(
     };
 }
 
+pub async fn error_reply(client: &Context, content: String, title: Option<String>) -> CreateReply {
+    CreateReply::default()
+        .embed(error_embed(client, title, Some(content)).await)
+        .reply(true)
+}
+
 pub async fn info_message(
     ctx: &Context,
     channel_id: &ChannelId,
@@ -82,4 +89,10 @@ pub async fn info_message(
             error!("Failed to send error message: {:?}", why);
         }
     };
+}
+
+pub async fn info_reply(client: &Context, content: String, title: Option<String>) -> CreateReply {
+    CreateReply::default()
+        .embed(info_embed(client, title, Some(content)).await)
+        .reply(true)
 }

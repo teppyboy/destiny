@@ -1,10 +1,10 @@
 use crate::commands::{Context, Error};
-use crate::utils;
+use crate::utils::message::{error_reply, info_reply};
 use reqwest::Client as HttpClient;
 use serenity::async_trait;
+use songbird::Songbird;
 use songbird::events::{Event, EventContext, EventHandler as VoiceEventHandler, TrackEvent};
 use songbird::input::{Compose, YoutubeDl};
-use songbird::Songbird;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use tracing::{debug, error, trace};
@@ -29,7 +29,7 @@ impl VoiceEventHandler for TrackErrorNotifier {
     }
 }
 
-pub async fn join_vc(ctx: Context<'_>, manager: Arc<Songbird>) {
+pub async fn join_vc(ctx: Context<'_>, manager: Arc<Songbird>) -> Result<(), String> {
     trace!("Joining VC...");
     let (guild_id, channel_id) = {
         let guild = ctx.guild_id().unwrap();
@@ -45,14 +45,7 @@ pub async fn join_vc(ctx: Context<'_>, manager: Arc<Songbird>) {
     let connect_to = match channel_id {
         Some(channel) => channel,
         None => {
-            utils::message::error_message(
-                &ctx.serenity_context(),
-                &ctx.channel_id(),
-                "You are not in a voice channel.".to_string(),
-                Some("Error".to_string()),
-            )
-            .await;
-            return;
+            return Err("User not in a voice channel.".to_string());
         }
     };
     if let Ok(handler_lock) = manager.join(guild_id, connect_to).await {
@@ -60,13 +53,46 @@ pub async fn join_vc(ctx: Context<'_>, manager: Arc<Songbird>) {
         let mut handler = handler_lock.lock().await;
         handler.add_global_event(TrackEvent::Error.into(), TrackErrorNotifier);
     }
+    Ok(())
+}
+
+pub async fn query_track(query: String) -> Result<YoutubeDl, Error> {
+    let client = HTTP_CLIENT.clone();
+    let search = !query.starts_with("http") || query.contains(" ");
+    let src = if search {
+        YoutubeDl::new_search(client, query)
+    } else {
+        YoutubeDl::new(client, query)
+    };
+    Ok(src)
 }
 
 /// baka
 #[poise::command(slash_command, prefix_command)]
 pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
     let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
-    join_vc(ctx, manager).await;
+    match join_vc(ctx, manager).await {
+        Ok(_) => {}
+        Err(why) => {
+            error!("Failed to join VC: {:?}", why);
+            match ctx
+                .send(
+                    error_reply(
+                        ctx.serenity_context(),
+                        format!("Failed to join voice channel: {}", why),
+                        Some("Music".to_string()),
+                    )
+                    .await,
+                )
+                .await
+            {
+                Err(why) => {
+                    error!("Failed to send message: {:?}", why);
+                }
+                _ => {}
+            }
+        }
+    };
     Ok(())
 }
 
@@ -88,21 +114,56 @@ pub async fn play(
     let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
     trace!("Getting VC handler...");
     if manager.get(ctx.guild_id().unwrap()).is_none() {
-        join_vc(ctx, manager.clone()).await;
+        match join_vc(ctx, manager.clone()).await {
+            Ok(_) => {}
+            Err(why) => {
+                error!("Failed to join VC: {:?}", why);
+                match ctx
+                    .send(
+                        error_reply(
+                            ctx.serenity_context(),
+                            format!("Failed to join voice channel: {}", why),
+                            Some("Music".to_string()),
+                        )
+                        .await,
+                    )
+                    .await
+                {
+                    Err(why) => {
+                        error!("Failed to send message: {:?}", why);
+                    }
+                    _ => {}
+                }
+                return Ok(());
+            }
+        }
     }
+    ctx.defer().await?;
     let handler_lock = manager.get(ctx.guild_id().unwrap()).unwrap();
     let mut handler = handler_lock.lock().await;
-    trace!("Cloning HTTP client (inefficient af)...");
-    let client = HTTP_CLIENT.clone();
-    let search = !query.starts_with("http") || query.contains(" ");
-    trace!("Search?: {}", search);
-    trace!("Begin searching...");
-    let mut src = if search {
-        YoutubeDl::new_search(client, query)
-    } else {
-        YoutubeDl::new(client, query)
+    let mut src = match query_track(query).await {
+        Ok(src) => src,
+        Err(why) => {
+            error!("Failed to get track: {:?}", why);
+            match ctx
+                .send(
+                    error_reply(
+                        ctx.serenity_context(),
+                        format!("Failed to join fetch track information: {}", why),
+                        Some("Music".to_string()),
+                    )
+                    .await,
+                )
+                .await
+            {
+                Err(why) => {
+                    error!("Failed to send message: {:?}", why);
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
     };
-    trace!("Got result, playing");
     let _ = handler.play_input(src.clone().into());
     trace!("Done (for now).");
     let metadata = match src.aux_metadata().await {
@@ -112,16 +173,25 @@ pub async fn play(
             return Ok(());
         }
     };
-    utils::message::info_message(
-        &ctx.serenity_context(),
-        &ctx.channel_id(),
-        format!(
-            "Playing track: [{}]({})",
-            metadata.title.unwrap(),
-            metadata.source_url.unwrap()
-        ),
-        Some("Music".to_string()),
-    )
-    .await;
+    match ctx
+        .send(
+            info_reply(
+                ctx.serenity_context(),
+                format!(
+                    "Playing track: [{}]({})",
+                    metadata.title.unwrap(),
+                    metadata.source_url.unwrap()
+                ),
+                Some("Music".to_string()),
+            )
+            .await,
+        )
+        .await
+    {
+        Err(why) => {
+            error!("Failed to send message: {:?}", why);
+        }
+        _ => {}
+    }
     Ok(())
 }
