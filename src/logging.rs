@@ -9,7 +9,7 @@ pub fn setup(level: &str, file_name: Option<&str>) -> Result<(), ()> {
         .with_level(true)
         .with_target(true)
         .with_thread_ids(false)
-        .with_file(true)
+        .with_file(false)
         .with_line_number(true)
         .with_thread_names(false);
     let filter = EnvFilter::builder()
