@@ -63,6 +63,7 @@ async fn main() {
                 commands::ping::ping(),
                 commands::music::play(),
                 commands::music::join(),
+                commands::music::stop(),
             ],
             prefix_options: poise::PrefixFrameworkOptions {
                 prefix: Some(config.general.prefix.into()),

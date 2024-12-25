@@ -1,6 +1,7 @@
 use crate::commands::{Context, Error};
 use crate::utils::message::{error_reply, info_reply};
 use reqwest::Client as HttpClient;
+use serenity::all::{ChannelId, Mentionable};
 use serenity::async_trait;
 use songbird::Songbird;
 use songbird::events::{Event, EventContext, EventHandler as VoiceEventHandler, TrackEvent};
@@ -29,7 +30,7 @@ impl VoiceEventHandler for TrackErrorNotifier {
     }
 }
 
-pub async fn join_vc(ctx: Context<'_>, manager: Arc<Songbird>) -> Result<(), String> {
+pub async fn join_vc(ctx: Context<'_>, manager: Arc<Songbird>) -> Result<ChannelId, String> {
     trace!("Joining VC...");
     let (guild_id, channel_id) = {
         let guild = ctx.guild_id().unwrap();
@@ -53,7 +54,7 @@ pub async fn join_vc(ctx: Context<'_>, manager: Arc<Songbird>) -> Result<(), Str
         let mut handler = handler_lock.lock().await;
         handler.add_global_event(TrackEvent::Error.into(), TrackErrorNotifier);
     }
-    Ok(())
+    Ok(channel_id.unwrap())
 }
 
 pub async fn query_track(query: String) -> Result<YoutubeDl, Error> {
@@ -67,12 +68,30 @@ pub async fn query_track(query: String) -> Result<YoutubeDl, Error> {
     Ok(src)
 }
 
-/// baka
-#[poise::command(slash_command, prefix_command)]
+/// Joins the voice channel of the user
+#[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer().await?;
     let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
     match join_vc(ctx, manager).await {
-        Ok(_) => {}
+        Ok(channel_id) => {
+            match ctx
+                .send(
+                    info_reply(
+                        ctx.serenity_context(),
+                        format!("Joined {}", channel_id.mention()),
+                        Some("Music".to_string()),
+                    )
+                    .await,
+                )
+                .await
+            {
+                Err(why) => {
+                    error!("Failed to send message: {:?}", why);
+                }
+                _ => {}
+            }
+        }
         Err(why) => {
             error!("Failed to join VC: {:?}", why);
             match ctx
@@ -97,7 +116,7 @@ pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Play a track by url or query
-#[poise::command(slash_command, prefix_command)]
+#[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn play(
     ctx: Context<'_>,
     #[description = "The track to play, can be url or query"]
@@ -113,7 +132,8 @@ pub async fn play(
     trace!("Getting songbird manager..");
     let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
     trace!("Getting VC handler...");
-    if manager.get(ctx.guild_id().unwrap()).is_none() {
+    let handler_lock = manager.get(ctx.guild_id().unwrap());
+    if handler_lock.is_none() || handler_lock.unwrap().lock().await.current_channel().is_none() {
         match join_vc(ctx, manager.clone()).await {
             Ok(_) => {}
             Err(why) => {
@@ -182,6 +202,34 @@ pub async fn play(
                     metadata.title.unwrap(),
                     metadata.source_url.unwrap()
                 ),
+                Some("Music".to_string()),
+            )
+            .await,
+        )
+        .await
+    {
+        Err(why) => {
+            error!("Failed to send message: {:?}", why);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Stops the music player and disconnect the voice channel
+#[poise::command(slash_command, prefix_command, guild_only)]
+pub async fn stop(ctx: Context<'_>) -> Result<(), Error> {
+    let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
+    let handler_lock = manager.get(ctx.guild_id().unwrap()).unwrap();
+    let mut handler = handler_lock.lock().await;
+    handler.stop();
+    handler.remove_all_global_events();
+    handler.leave().await.unwrap();
+    match ctx
+        .send(
+            info_reply(
+                ctx.serenity_context(),
+                "Stopped the music player and left the voice channel.".to_string(),
                 Some("Music".to_string()),
             )
             .await,
