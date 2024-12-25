@@ -20,7 +20,7 @@ struct Handler;
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, _: Context, ready: Ready) {
-        info!("Connected to Discord as '{}'", ready.user.name);
+        info!("Connected to Discord as '{}#{}'", ready.user.name, ready.user.discriminator.unwrap());
     }
 }
 
