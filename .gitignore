@@ -3,3 +3,4 @@
 # Destiny-specific files
 .env
 config.toml
+/log

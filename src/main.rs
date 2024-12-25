@@ -2,10 +2,11 @@ use crate::config::Config;
 use dotenvy::dotenv;
 use serenity::gateway::ActivityData;
 use serenity::prelude::*;
-use std::{env, path::Path};
+use std::{env, path::Path, sync::Arc};
 use tokio::sync::OnceCell;
 use tracing::{error, info};
 
+mod commands;
 mod config;
 mod logging;
 
@@ -24,21 +25,51 @@ async fn main() {
         config = config::Config::load("./config.toml");
     } else {
         config = config::Config::new();
+        println!("Config file not found. Creating a new one...");
         config.save("./config.toml");
     }
     let level_str = config.log.level.clone();
     let log_level = env::var("LOG_LEVEL").unwrap_or(level_str);
-    logging::setup(&log_level).expect("Failed to setup logging.");
+    let log_file_name: Option<&str> = match &config.log.file.enabled {
+        true => Some(&config.log.file.path),
+        false => None,
+    };
+    logging::setup(&log_level, log_file_name).expect("Failed to setup logging.");
     CONFIG
-        .set(config)
+        .set(config.clone())
         .expect("Failed to register config to global state.");
-    info!("Destiny v{} - dev dev", env!("CARGO_PKG_VERSION"));
+    info!(
+        "Destiny v{} - {}",
+        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_REPOSITORY")
+    );
     info!("Log level: {}", log_level);
     info!("Initializing Discord client...");
 
     // Login with a bot token from the environment
+    let framework = poise::Framework::builder()
+        .options(poise::FrameworkOptions {
+            commands: vec![commands::age::age()],
+            prefix_options: poise::PrefixFrameworkOptions {
+                prefix: Some(config.general.prefix.into()),
+                edit_tracker: Some(Arc::new(poise::EditTracker::for_timespan(
+                    std::time::Duration::from_secs(3600),
+                ))),
+                case_insensitive_commands: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .setup(|ctx, _ready, framework| {
+            Box::pin(async move {
+                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+                Ok(commands::Data {})
+            })
+        })
+        .build();
     let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
     let mut client = Client::builder(discord_token, intents)
+        .framework(framework)
         .activity(ActivityData::playing("music"))
         .await
         .expect("Error creating client");

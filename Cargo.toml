@@ -2,10 +2,19 @@
 name = "destiny"
 version = "0.1.0"
 edition = "2024"
+authors = ["Nguyễn Thế Hưng <kori@tretrauit.me>"]
+description = "A music bot for Discord written in Rust"
+readme = "README.md"
+homepage = "https://github.com/teppyboy/destiny"
+repository = "https://github.com/teppyboy/destiny"
+license = "AGPL-3.0-or-later"
+keywords = ["discord", "music", "bot", "async", "rust"]
 
 [dependencies]
+chrono = "0.4.39"
 dotenvy = "0.15.7"
 log = "0.4.22"
+poise = "0.6.1"
 serde = { version = "1.0.216", features = ["derive"] }
 serenity = { version = "0.12.4", features = ["full"] }
 tokio = { version = "1.42.0", features = ["full"] }

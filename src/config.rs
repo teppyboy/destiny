@@ -57,7 +57,7 @@ impl Config {
                 level: "info".to_string(),
                 file: FileLog {
                     enabled: false,
-                    path: "destiny-%YY%%MM%DD-%HH%MM%SS.log".to_string(),
+                    path: "destiny-%Y%m%d-%H%M%S.log".to_string(),
                 },
             },
             privileged: Privileged {
