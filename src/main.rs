@@ -27,10 +27,7 @@ impl EventHandler for Handler {
 #[tokio::main(flavor = "multi_thread", worker_threads = 32)]
 async fn main() {
     // .env is not required for our code to work.
-    match dotenv() {
-        Ok(_) => {}
-        Err(_) => {}
-    }
+    let _ = dotenv();
     let discord_token = env::var("DISCORD_TOKEN").expect("Discord token not found.");
     let config: Config;
     if Path::new("./config.toml").exists() {
