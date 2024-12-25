@@ -1,7 +1,9 @@
 use crate::config::Config;
 use dotenvy::dotenv;
-use serenity::gateway::ActivityData;
+use serenity::all::Ready;
 use serenity::prelude::*;
+use serenity::{async_trait, gateway::ActivityData};
+use songbird::SerenityInit;
 use std::{env, path::Path, sync::Arc};
 use tokio::sync::OnceCell;
 use tracing::{error, info};
@@ -9,8 +11,18 @@ use tracing::{error, info};
 mod commands;
 mod config;
 mod logging;
+mod utils;
 
 static CONFIG: OnceCell<Config> = OnceCell::const_new();
+
+struct Handler;
+
+#[async_trait]
+impl EventHandler for Handler {
+    async fn ready(&self, _: Context, ready: Ready) {
+        info!("Connected to Discord as '{}'", ready.user.name);
+    }
+}
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 32)]
 async fn main() {
@@ -49,7 +61,12 @@ async fn main() {
     // Login with a bot token from the environment
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: vec![commands::age::age()],
+            commands: vec![
+                commands::age::age(),
+                commands::ping::ping(),
+                commands::music::play(),
+                commands::music::join(),
+            ],
             prefix_options: poise::PrefixFrameworkOptions {
                 prefix: Some(config.general.prefix.into()),
                 edit_tracker: Some(Arc::new(poise::EditTracker::for_timespan(
@@ -69,8 +86,10 @@ async fn main() {
         .build();
     let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
     let mut client = Client::builder(discord_token, intents)
+        .event_handler(Handler)
         .framework(framework)
-        .activity(ActivityData::playing("music"))
+        .register_songbird()
+        .activity(ActivityData::playing("music!"))
         .await
         .expect("Error creating client");
 
