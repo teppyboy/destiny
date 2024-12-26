@@ -1,5 +1,7 @@
 use crate::config::Config;
+use commands::music::HttpKey;
 use dotenvy::dotenv;
+use reqwest::Client as HttpClient;
 use serenity::all::Ready;
 use serenity::prelude::*;
 use serenity::{async_trait, gateway::ActivityData};
@@ -20,7 +22,11 @@ struct Handler;
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, _: Context, ready: Ready) {
-        info!("Connected to Discord as '{}#{}'", ready.user.name, ready.user.discriminator.unwrap());
+        info!(
+            "Connected to Discord as '{}#{}'",
+            ready.user.name,
+            ready.user.discriminator.unwrap()
+        );
     }
 }
 
@@ -56,15 +62,19 @@ async fn main() {
     info!("Initializing Discord client...");
 
     // Login with a bot token from the environment
+    let mut commands: Vec<
+        poise::Command<
+            crate::commands::Data,
+            Box<(dyn serde::ser::StdError + std::marker::Send + Sync + 'static)>,
+        >,
+    > = vec![commands::age::age(), commands::ping::ping()];
+    if config.features.music_player.enabled {
+        info!("Music player enabled.");
+        commands.append(&mut commands::music::exports());
+    }
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: vec![
-                commands::age::age(),
-                commands::ping::ping(),
-                commands::music::play(),
-                commands::music::join(),
-                commands::music::stop(),
-            ],
+            commands,
             prefix_options: poise::PrefixFrameworkOptions {
                 prefix: Some(config.general.prefix.into()),
                 edit_tracker: Some(Arc::new(poise::EditTracker::for_timespan(
@@ -87,6 +97,7 @@ async fn main() {
         .event_handler(Handler)
         .framework(framework)
         .register_songbird()
+        .type_map_insert::<HttpKey>(HttpClient::new())
         .activity(ActivityData::playing("music!"))
         .await
         .expect("Error creating client");

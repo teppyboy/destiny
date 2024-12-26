@@ -18,7 +18,7 @@ poise = "0.6.1"
 reqwest = "0.11.27"
 serde = { version = "1.0.216", features = ["derive"] }
 serenity = { version = "0.12.4", features = ["full"] }
-songbird = { version = "0.4.6", features = ["gateway", "serenity", "simd-json"] }
+songbird = { version = "0.4.6", features = ["builtin-queue", "gateway", "serenity", "simd-json"] }
 symphonia = { version = "0.5.2", features = ["aac", "mp3", "isomp4", "alac"] }
 tokio = { version = "1.42.0", features = ["full"] }
 toml = "0.8.19"
