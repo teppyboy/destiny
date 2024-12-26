@@ -1,4 +1,8 @@
-use crate::config::Config;
+use crate::{
+    config::Config,
+    commands::{Context, Error},
+    utils::message::{info_reply, send_reply},
+};
 use commands::music::HttpKey;
 use dotenvy::dotenv;
 use reqwest::Client as HttpClient;
@@ -21,7 +25,7 @@ struct Handler;
 
 #[async_trait]
 impl EventHandler for Handler {
-    async fn ready(&self, _: Context, ready: Ready) {
+    async fn ready(&self, _: serenity::client::Context, ready: Ready) {
         info!(
             "Connected to Discord as '{}#{}'",
             ready.user.name,
@@ -67,7 +71,7 @@ async fn main() {
             crate::commands::Data,
             Box<(dyn serde::ser::StdError + std::marker::Send + Sync + 'static)>,
         >,
-    > = vec![commands::age::age(), commands::ping::ping()];
+    > = vec![about(), commands::age::age(), commands::ping::ping()];
     if config.features.music_player.enabled {
         info!("Music player enabled.");
         commands.append(&mut commands::music::exports());
@@ -106,4 +110,31 @@ async fn main() {
     if let Err(why) = client.start_autosharded().await {
         error!("An error occurred while running the client: {:?}", why);
     }
+}
+
+/// Shows the latency between the bot and Discord server.
+#[poise::command(slash_command, prefix_command)]
+pub async fn about(ctx: Context<'_>) -> Result<(), Error> {
+    let reply_str = format!(
+        "Destiny v{} ({}) - {}\n\
+        Log level: `{}`\n\
+        Build type: `{}`\n\n\
+        Like my work? Consider supporting me at my [Ko-fi](https://ko-fi.com/tretrauit) or [Patreon](https://patreon.com/tretrauit)!",
+        env!("CARGO_PKG_VERSION"),
+        env!("GIT_HASH"),
+        env!("CARGO_PKG_REPOSITORY"),
+        CONFIG.get().unwrap().log.level.clone().as_str(),
+        env!("BUILD_PROFILE"),
+    );
+    send_reply(
+        &ctx,
+        info_reply(
+            Some(ctx.serenity_context()),
+            reply_str,
+            Some("Information".to_string()),
+        )
+        .await,
+    )
+    .await;
+    Ok(())
 }
