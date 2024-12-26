@@ -7,14 +7,20 @@ use serenity::prelude::TypeMapKey;
 use songbird::Songbird;
 use songbird::events::{Event, EventContext, EventHandler as VoiceEventHandler, TrackEvent};
 use songbird::input::{AuxMetadata, Compose, YoutubeDl};
-use std::sync::Arc;
+use uuid::Uuid;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock};
+use tokio::sync::Mutex;
 use tracing::{debug, error, trace};
+
+static TRACK_METADATA: LazyLock<Mutex<HashMap<Uuid, AuxMetadata>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub struct HttpKey;
 
 impl TypeMapKey for HttpKey {
     type Value = HttpClient;
 }
+
 struct TrackStartNotifier {
     channel_id: ChannelId,
     metadata: AuxMetadata,
@@ -43,6 +49,33 @@ impl VoiceEventHandler for TrackStartNotifier {
     }
 }
 
+struct TrackEndNotifier;
+
+#[async_trait]
+impl VoiceEventHandler for TrackEndNotifier {
+    async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
+        if let EventContext::Track(track_info) = ctx {
+            // Remove the metadata from the map (since the track has ended)
+            let mut metadatas = TRACK_METADATA.lock().await;
+            for (_, handle) in track_info.iter() {
+                metadatas.remove(&handle.uuid());
+            }
+        }
+        None
+    }
+}
+
+async fn in_vc(ctx: &Context<'_>, manager: &Arc<Songbird>) -> bool {
+    let handler_lock = manager.get(ctx.guild_id().unwrap());
+    return handler_lock.is_some()
+        && handler_lock
+            .unwrap()
+            .lock()
+            .await
+            .current_channel()
+            .is_some()
+}
+
 async fn join_vc(ctx: Context<'_>, manager: Arc<Songbird>) -> Result<ChannelId, String> {
     trace!("Joining VC...");
     let (guild_id, channel_id) = {
@@ -66,6 +99,23 @@ async fn join_vc(ctx: Context<'_>, manager: Arc<Songbird>) -> Result<ChannelId, 
         return Ok(channel_id.unwrap());
     }
     return Err("Failed to join voice channel.".to_string());
+}
+
+async fn notify_if_not_vc(ctx: &Context<'_>, manager: &Arc<Songbird>) -> bool {
+    if !in_vc(&ctx, &manager).await {
+        send_reply(
+            &ctx,
+            error_reply(
+                Some(ctx.serenity_context()),
+                "Not in a voice channel.".to_string(),
+                Some("Music".to_string()),
+            )
+            .await,
+        )
+        .await;
+        return true;
+    }
+    false
 }
 
 async fn get_http_client(ctx: &Context<'_>) -> HttpClient {
@@ -121,6 +171,46 @@ pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Shows the current queue
+#[poise::command(slash_command, prefix_command, guild_only)]
+pub async fn queue(ctx: Context<'_>) -> Result<(), Error> {
+    let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
+    if notify_if_not_vc(&ctx, &manager).await {
+        return Ok(());
+    }
+    let handler_lock = manager.get(ctx.guild_id().unwrap()).unwrap();
+    let handler = handler_lock.lock().await;
+    let queue = handler.queue();
+    let mut queue_str = format!("## Queue \n");
+    if queue.len() == 0 {
+        queue_str.push_str("Empty, add a track by executing `/play` command :)");
+    } else {
+        let metdatas = TRACK_METADATA.lock().await;
+        for (index, song) in queue.current_queue().into_iter().enumerate() {
+            // Safe to unwrap because we are sure that the metadata exists
+            let metadata = metdatas.get(&song.uuid()).unwrap();
+            queue_str.push_str(&format!(
+                "{}. [{}]({}){}\n",
+                index + 1,
+                metadata.title.as_ref().unwrap(),
+                metadata.source_url.as_ref().unwrap(),
+                if index == 0 { " (Now Playing)" } else { "" }
+            ));
+        }
+    }
+    send_reply(
+        &ctx,
+        info_reply(
+            Some(ctx.serenity_context()),
+            queue_str,
+            Some("Music".to_string()),
+        )
+        .await,
+    )
+    .await;
+    Ok(())
+}
+
 /// Play a track by url or query
 #[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn play(
@@ -137,14 +227,7 @@ pub async fn play(
         ctx.author().id
     );
     let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
-    let handler_lock = manager.get(ctx.guild_id().unwrap());
-    if handler_lock.is_none()
-        || handler_lock
-            .unwrap()
-            .lock()
-            .await
-            .current_channel()
-            .is_none()
+
     {
         match join_vc(ctx, manager.clone()).await {
             Ok(_) => {}
@@ -207,6 +290,9 @@ pub async fn play(
         metadata: metadata.clone(),
         http: send_http,
     });
+    let _ = song.add_event(Event::Track(TrackEvent::End), TrackEndNotifier);
+    let mut metadatas = TRACK_METADATA.lock().await;
+    metadatas.insert(song.uuid(), metadata.clone());
     trace!("Added song to queue.");
     if handler.queue().len() == 1 {
         return Ok(());
@@ -232,6 +318,9 @@ pub async fn play(
 #[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
     let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
+    if notify_if_not_vc(&ctx, &manager).await {
+        return Ok(());
+    }
     let handler_lock = manager.get(ctx.guild_id().unwrap()).unwrap();
     let handler = handler_lock.lock().await;
     if handler.queue().len() == 0 {
@@ -281,6 +370,9 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
 #[poise::command(slash_command, prefix_command, guild_only, aliases("leave"))]
 pub async fn stop(ctx: Context<'_>) -> Result<(), Error> {
     let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
+    if notify_if_not_vc(&ctx, &manager).await {
+        return Ok(());
+    }
     let handler_lock = manager.get(ctx.guild_id().unwrap()).unwrap();
     let mut handler = handler_lock.lock().await;
     handler.queue().stop();
@@ -311,5 +403,5 @@ pub fn exports() -> Vec<
         Box<(dyn serde::ser::StdError + std::marker::Send + Sync + 'static)>,
     >,
 > {
-    vec![join(), play(), skip(), stop()]
+    vec![join(), play(), queue(), skip(), stop()]
 }
