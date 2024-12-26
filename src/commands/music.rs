@@ -1,10 +1,10 @@
 use crate::commands::{Context, Error};
 use crate::utils::message::{error_reply, info_message, info_reply, send_message, send_reply};
 use reqwest::Client as HttpClient;
-use serenity::all::{ChannelId, Http, Mentionable};
+use serenity::all::{Cache, ChannelId, GuildChannel, Http, Mentionable};
 use serenity::async_trait;
 use serenity::prelude::TypeMapKey;
-use songbird::Songbird;
+use songbird::{CoreEvent, Songbird};
 use songbird::events::{Event, EventContext, EventHandler as VoiceEventHandler, TrackEvent};
 use songbird::input::{AuxMetadata, Compose, YoutubeDl};
 use uuid::Uuid;
@@ -45,6 +45,27 @@ impl VoiceEventHandler for TrackStartNotifier {
             .await,
         )
         .await;
+        None
+    }
+}
+
+struct UserDisconnectedNotifier {
+    vc: GuildChannel,
+    songbird: Arc<Songbird>,
+    cache: Arc<Cache>,
+}
+
+#[async_trait]
+impl VoiceEventHandler for UserDisconnectedNotifier {
+    async fn act(&self, _ctx: &EventContext<'_>) -> Option<Event> {
+        let members = self.vc.members(self.cache.clone()).unwrap();
+        if members.len() == 1 {
+            let handler_lock = self.songbird.get(self.vc.guild_id).unwrap();
+            let mut handler = handler_lock.lock().await;
+            handler.queue().stop();
+            handler.remove_all_global_events();
+            handler.leave().await.unwrap();
+        }
         None
     }
 }
@@ -95,7 +116,13 @@ async fn join_vc(ctx: Context<'_>, manager: Arc<Songbird>) -> Result<ChannelId, 
             return Err("User not in a voice channel.".to_string());
         }
     };
-    if let Ok(_) = manager.join(guild_id, connect_to).await {
+    if let Ok(handler_lock) = manager.join(guild_id, connect_to).await {
+        let mut handler = handler_lock.lock().await;
+        handler.add_global_event(Event::Core(CoreEvent::ClientDisconnect), UserDisconnectedNotifier {
+            vc: guild_id.channels(ctx.http()).await.unwrap().get(&connect_to).unwrap().clone(),
+            cache: ctx.serenity_context().cache.clone(),
+            songbird: manager.clone(),
+        });
         return Ok(channel_id.unwrap());
     }
     return Err("Failed to join voice channel.".to_string());
@@ -171,43 +198,81 @@ pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// Shows the current queue
+/// Pauses the current track
 #[poise::command(slash_command, prefix_command, guild_only)]
-pub async fn queue(ctx: Context<'_>) -> Result<(), Error> {
+pub async fn pause(ctx: Context<'_>) -> Result<(), Error> {
     let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
     if notify_if_not_vc(&ctx, &manager).await {
         return Ok(());
     }
     let handler_lock = manager.get(ctx.guild_id().unwrap()).unwrap();
     let handler = handler_lock.lock().await;
-    let queue = handler.queue();
-    let mut queue_str = format!("## Queue \n");
-    if queue.len() == 0 {
-        queue_str.push_str("Empty, add a track by executing `/play` command :)");
-    } else {
-        let metdatas = TRACK_METADATA.lock().await;
-        for (index, song) in queue.current_queue().into_iter().enumerate() {
-            // Safe to unwrap because we are sure that the metadata exists
-            let metadata = metdatas.get(&song.uuid()).unwrap();
-            queue_str.push_str(&format!(
-                "{}. [{}]({}){}\n",
-                index + 1,
-                metadata.title.as_ref().unwrap(),
-                metadata.source_url.as_ref().unwrap(),
-                if index == 0 { " (Now Playing)" } else { "" }
-            ));
+    match handler.queue().pause() {
+        Ok(_) => {
+            send_reply(
+                &ctx,
+                info_reply(
+                    Some(ctx.serenity_context()),
+                    "Paused the current track.".to_string(),
+                    Some("Music".to_string()),
+                )
+                .await,
+            )
+            .await;
+        }
+        Err(why) => {
+            error!("Failed to pause track: {:?}", why);
+            send_reply(
+                &ctx,
+                error_reply(
+                    Some(ctx.serenity_context()),
+                    format!("Failed to pause track: {}", why),
+                    Some("Music".to_string()),
+                )
+                .await,
+            )
+            .await;
         }
     }
-    send_reply(
-        &ctx,
-        info_reply(
-            Some(ctx.serenity_context()),
-            queue_str,
-            Some("Music".to_string()),
-        )
-        .await,
-    )
-    .await;
+    Ok(())
+}
+
+/// Unpauses the current track
+#[poise::command(slash_command, prefix_command, guild_only, aliases("unpause"))]
+pub async fn resume(ctx: Context<'_>) -> Result<(), Error> {
+    let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
+    if notify_if_not_vc(&ctx, &manager).await {
+        return Ok(());
+    }
+    let handler_lock = manager.get(ctx.guild_id().unwrap()).unwrap();
+    let handler = handler_lock.lock().await;
+    match handler.queue().resume() {
+        Ok(_) => {
+            send_reply(
+                &ctx,
+                info_reply(
+                    Some(ctx.serenity_context()),
+                    "Unpaused the current track.".to_string(),
+                    Some("Music".to_string()),
+                )
+                .await,
+            )
+            .await;
+        }
+        Err(why) => {
+            error!("Failed to unpause track: {:?}", why);
+            send_reply(
+                &ctx,
+                error_reply(
+                    Some(ctx.serenity_context()),
+                    format!("Failed to unpause track: {}", why),
+                    Some("Music".to_string()),
+                )
+                .await,
+            )
+            .await;
+        }
+    }
     Ok(())
 }
 
@@ -227,8 +292,7 @@ pub async fn play(
         ctx.author().id
     );
     let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
-
-    {
+    if !in_vc(&ctx, &manager).await {
         match join_vc(ctx, manager.clone()).await {
             Ok(_) => {}
             Err(why) => {
@@ -293,7 +357,6 @@ pub async fn play(
     let _ = song.add_event(Event::Track(TrackEvent::End), TrackEndNotifier);
     let mut metadatas = TRACK_METADATA.lock().await;
     metadatas.insert(song.uuid(), metadata.clone());
-    trace!("Added song to queue.");
     if handler.queue().len() == 1 {
         return Ok(());
     }
@@ -306,6 +369,46 @@ pub async fn play(
                 metadata.title.as_ref().unwrap(),
                 metadata.source_url.as_ref().unwrap()
             ),
+            Some("Music".to_string()),
+        )
+        .await,
+    )
+    .await;
+    Ok(())
+}
+
+/// Shows the current queue
+#[poise::command(slash_command, prefix_command, guild_only)]
+pub async fn queue(ctx: Context<'_>) -> Result<(), Error> {
+    let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
+    if notify_if_not_vc(&ctx, &manager).await {
+        return Ok(());
+    }
+    let handler_lock = manager.get(ctx.guild_id().unwrap()).unwrap();
+    let handler = handler_lock.lock().await;
+    let queue = handler.queue();
+    let mut queue_str = format!("## Queue \n");
+    if queue.len() == 0 {
+        queue_str.push_str("Empty, add a track by executing `/play` command :)");
+    } else {
+        let metdatas = TRACK_METADATA.lock().await;
+        for (index, song) in queue.current_queue().into_iter().enumerate() {
+            // Safe to unwrap because we are sure that the metadata exists
+            let metadata = metdatas.get(&song.uuid()).unwrap();
+            queue_str.push_str(&format!(
+                "{}. [{}]({}){}\n",
+                index + 1,
+                metadata.title.as_ref().unwrap(),
+                metadata.source_url.as_ref().unwrap(),
+                if index == 0 { " (Now Playing)" } else { "" }
+            ));
+        }
+    }
+    send_reply(
+        &ctx,
+        info_reply(
+            Some(ctx.serenity_context()),
+            queue_str,
             Some("Music".to_string()),
         )
         .await,
@@ -403,5 +506,5 @@ pub fn exports() -> Vec<
         Box<(dyn serde::ser::StdError + std::marker::Send + Sync + 'static)>,
     >,
 > {
-    vec![join(), play(), queue(), skip(), stop()]
+    vec![join(), play(), pause(), resume(), queue(), skip(), stop()]
 }
