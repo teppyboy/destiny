@@ -4,7 +4,12 @@ A music bot for Discord written in Rust.
 
 ## Features
 
-Currently it can do nothing, sorry for that.
+### Music
+- [x] Play music from sources (`/play`)
+- [x] Stop playing music (`/stop`)
+- [x] Skip current track (`/skip`)
+- [x] View current queue (`/queue`)
+- [x] Manually join the voice channel (`/join`)
 
 ## Installation
 
