@@ -1,21 +1,25 @@
+use crate::CONFIG;
 use crate::commands::{Context, Error};
 use crate::utils::message::{error_reply, info_message, info_reply, send_message, send_reply};
-use crate::CONFIG;
 use reqwest::Client as HttpClient;
 use serenity::all::{Cache, ChannelId, GuildChannel, Http, Mentionable};
 use serenity::async_trait;
 use serenity::prelude::TypeMapKey;
-use songbird::{CoreEvent, Songbird};
 use songbird::events::{Event, EventContext, EventHandler as VoiceEventHandler, TrackEvent};
 use songbird::input::{AuxMetadata, Compose, YoutubeDl};
-use uuid::Uuid;
+use songbird::{CoreEvent, Songbird};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex;
 use tracing::{debug, error, trace};
+use uuid::Uuid;
 
-static TRACK_METADATA: LazyLock<Mutex<HashMap<Uuid, AuxMetadata>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
-const YTDL_POT_ARGS: [&str; 2] = ["--extractor-args", "youtube:getpot_bgutil_baseurl=http://127.0.0.1:{port}"];
+static TRACK_METADATA: LazyLock<Mutex<HashMap<Uuid, AuxMetadata>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+const YTDL_POT_ARGS: [&str; 2] = [
+    "--extractor-args",
+    "youtube:getpot_bgutil_baseurl=http://127.0.0.1:{port}",
+];
 const YTDL_COOKIES_ARGS: [&str; 2] = ["--cookies", "{path}"];
 
 pub struct HttpKey;
@@ -97,7 +101,7 @@ async fn in_vc(ctx: &Context<'_>, manager: &Arc<Songbird>) -> bool {
             .lock()
             .await
             .current_channel()
-            .is_some()
+            .is_some();
 }
 
 async fn join_vc(ctx: Context<'_>, manager: Arc<Songbird>) -> Result<ChannelId, String> {
@@ -121,11 +125,20 @@ async fn join_vc(ctx: Context<'_>, manager: Arc<Songbird>) -> Result<ChannelId, 
     };
     if let Ok(handler_lock) = manager.join(guild_id, connect_to).await {
         let mut handler = handler_lock.lock().await;
-        handler.add_global_event(Event::Core(CoreEvent::ClientDisconnect), UserDisconnectedNotifier {
-            vc: guild_id.channels(ctx.http()).await.unwrap().get(&connect_to).unwrap().clone(),
-            cache: ctx.serenity_context().cache.clone(),
-            songbird: manager.clone(),
-        });
+        handler.add_global_event(
+            Event::Core(CoreEvent::ClientDisconnect),
+            UserDisconnectedNotifier {
+                vc: guild_id
+                    .channels(ctx.http())
+                    .await
+                    .unwrap()
+                    .get(&connect_to)
+                    .unwrap()
+                    .clone(),
+                cache: ctx.serenity_context().cache.clone(),
+                songbird: manager.clone(),
+            },
+        );
         return Ok(channel_id.unwrap());
     }
     return Err("Failed to join voice channel.".to_string());
@@ -138,6 +151,28 @@ async fn notify_if_not_vc(ctx: &Context<'_>, manager: &Arc<Songbird>) -> bool {
             error_reply(
                 Some(ctx.serenity_context()),
                 "Not in a voice channel.".to_string(),
+                Some("Music".to_string()),
+            )
+            .await,
+        )
+        .await;
+        return true;
+    }
+    let channel_id = {
+        let channel_id = ctx
+            .guild()
+            .unwrap()
+            .voice_states
+            .get(&ctx.author().id)
+            .and_then(|voice_state| voice_state.channel_id);
+        channel_id
+    };
+    if channel_id.is_none() {
+        send_reply(
+            &ctx,
+            error_reply(
+                Some(ctx.serenity_context()),
+                "User not in a voice channel.".to_string(),
                 Some("Music".to_string()),
             )
             .await,
@@ -165,13 +200,38 @@ async fn query_track(ctx: &Context<'_>, query: String) -> Result<YoutubeDl, Erro
     };
     let config = CONFIG.get().unwrap();
     if config.features.music_player.workarounds.ytdl_use_pot {
-        let mut string_args: Vec<String> = YTDL_POT_ARGS.to_vec().into_iter().map(|s| s.to_string()).collect();
-        string_args[1] = string_args[1].replace("{port}", config.features.music_player.workarounds.ytdl_pot_server_port.to_string().as_str());
+        let mut string_args: Vec<String> = YTDL_POT_ARGS
+            .to_vec()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        string_args[1] = string_args[1].replace(
+            "{port}",
+            config
+                .features
+                .music_player
+                .workarounds
+                .ytdl_pot_server_port
+                .to_string()
+                .as_str(),
+        );
         src = src.user_args(string_args);
     }
     if config.features.music_player.workarounds.ytdl_use_cookies {
-        let mut string_args: Vec<String> = YTDL_COOKIES_ARGS.to_vec().into_iter().map(|s| s.to_string()).collect();
-        string_args[1] = string_args[1].replace("{path}", config.features.music_player.workarounds.ytdl_cookies_path.as_str());
+        let mut string_args: Vec<String> = YTDL_COOKIES_ARGS
+            .to_vec()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        string_args[1] = string_args[1].replace(
+            "{path}",
+            config
+                .features
+                .music_player
+                .workarounds
+                .ytdl_cookies_path
+                .as_str(),
+        );
         src = src.user_args(string_args);
     }
     Ok(src)

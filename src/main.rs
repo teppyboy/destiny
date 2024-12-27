@@ -1,6 +1,6 @@
 use crate::{
-    config::Config,
     commands::{Context, Error},
+    config::Config,
     utils::message::{info_reply, send_reply},
 };
 use commands::music::HttpKey;

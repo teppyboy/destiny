@@ -97,7 +97,7 @@ impl Config {
                         ytdl_pot_server_port: 58553,
                         ytdl_use_cookies: false,
                         ytdl_cookies_path: "cookies.txt".to_string(),
-                    }
+                    },
                 },
             },
             general: General {
