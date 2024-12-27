@@ -31,6 +31,8 @@ pub struct Feature {
 pub struct MusicPlayerWorkarounds {
     pub ytdl_use_pot: bool,
     pub ytdl_pot_server_port: u16,
+    pub ytdl_use_cookies: bool,
+    pub ytdl_cookies_path: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -93,6 +95,8 @@ impl Config {
                     workarounds: MusicPlayerWorkarounds {
                         ytdl_use_pot: false,
                         ytdl_pot_server_port: 58553,
+                        ytdl_use_cookies: false,
+                        ytdl_cookies_path: "cookies.txt".to_string(),
                     }
                 },
             },

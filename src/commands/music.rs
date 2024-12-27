@@ -16,6 +16,7 @@ use tracing::{debug, error, trace};
 
 static TRACK_METADATA: LazyLock<Mutex<HashMap<Uuid, AuxMetadata>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 const YTDL_POT_ARGS: [&str; 2] = ["--extractor-args", "youtube:getpot_bgutil_baseurl=http://127.0.0.1:{port}"];
+const YTDL_COOKIES_ARGS: [&str; 2] = ["--cookies", "{path}"];
 
 pub struct HttpKey;
 
@@ -162,9 +163,15 @@ async fn query_track(ctx: &Context<'_>, query: String) -> Result<YoutubeDl, Erro
     } else {
         YoutubeDl::new(client, query)
     };
-    if CONFIG.get().unwrap().features.music_player.workarounds.ytdl_use_pot {
-        let string_args: Vec<String> = YTDL_POT_ARGS.to_vec().into_iter().map(|s| s.to_string()).collect();
-        string_args[1].replace("{port}", &CONFIG.get().unwrap().features.music_player.workarounds.ytdl_pot_server_port.to_string());
+    let config = CONFIG.get().unwrap();
+    if config.features.music_player.workarounds.ytdl_use_pot {
+        let mut string_args: Vec<String> = YTDL_POT_ARGS.to_vec().into_iter().map(|s| s.to_string()).collect();
+        string_args[1] = string_args[1].replace("{port}", config.features.music_player.workarounds.ytdl_pot_server_port.to_string().as_str());
+        src = src.user_args(string_args);
+    }
+    if config.features.music_player.workarounds.ytdl_use_cookies {
+        let mut string_args: Vec<String> = YTDL_POT_ARGS.to_vec().into_iter().map(|s| s.to_string()).collect();
+        string_args[1] = string_args[1].replace("{path}", config.features.music_player.workarounds.ytdl_cookies_path.as_str());
         src = src.user_args(string_args);
     }
     Ok(src)
