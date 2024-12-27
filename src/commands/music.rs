@@ -170,7 +170,7 @@ async fn query_track(ctx: &Context<'_>, query: String) -> Result<YoutubeDl, Erro
         src = src.user_args(string_args);
     }
     if config.features.music_player.workarounds.ytdl_use_cookies {
-        let mut string_args: Vec<String> = YTDL_POT_ARGS.to_vec().into_iter().map(|s| s.to_string()).collect();
+        let mut string_args: Vec<String> = YTDL_COOKIES_ARGS.to_vec().into_iter().map(|s| s.to_string()).collect();
         string_args[1] = string_args[1].replace("{path}", config.features.music_player.workarounds.ytdl_cookies_path.as_str());
         src = src.user_args(string_args);
     }
