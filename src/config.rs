@@ -91,7 +91,8 @@ impl Config {
                         channels: vec![],
                     },
                     workarounds: MusicPlayerWorkarounds {
-                        ytdl_use_pot: false
+                        ytdl_use_pot: false,
+                        ytdl_pot_server_port: 58553,
                     }
                 },
             },
