@@ -28,8 +28,22 @@ pub struct Feature {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MusicPlayerWorkarounds {
+    pub ytdl_use_pot: bool,
+    pub ytdl_pot_server_port: u16,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MusicPlayer {
+    pub enabled: bool,
+    pub blacklist: List,
+    pub whitelist: List,
+    pub workarounds: MusicPlayerWorkarounds,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Features {
-    pub music_player: Feature,
+    pub music_player: MusicPlayer,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -64,7 +78,7 @@ impl Config {
                 allowed_users: vec![],
             },
             features: Features {
-                music_player: Feature {
+                music_player: MusicPlayer {
                     enabled: false,
                     blacklist: List {
                         enabled: false,
@@ -76,6 +90,9 @@ impl Config {
                         servers: vec![],
                         channels: vec![],
                     },
+                    workarounds: MusicPlayerWorkarounds {
+                        ytdl_use_pot: false
+                    }
                 },
             },
             general: General {

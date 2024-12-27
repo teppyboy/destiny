@@ -19,7 +19,7 @@ mod config;
 mod logging;
 mod utils;
 
-static CONFIG: OnceCell<Config> = OnceCell::const_new();
+pub static CONFIG: OnceCell<Config> = OnceCell::const_new();
 
 struct Handler;
 

@@ -1,5 +1,6 @@
 use crate::commands::{Context, Error};
 use crate::utils::message::{error_reply, info_message, info_reply, send_message, send_reply};
+use crate::CONFIG;
 use reqwest::Client as HttpClient;
 use serenity::all::{Cache, ChannelId, GuildChannel, Http, Mentionable};
 use serenity::async_trait;
@@ -14,6 +15,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, trace};
 
 static TRACK_METADATA: LazyLock<Mutex<HashMap<Uuid, AuxMetadata>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+const YTDL_POT_ARGS: [&str; 2] = ["--extractor-args", "youtube:getpot_bgutil_baseurl=http://127.0.0.1:{port}"];
 
 pub struct HttpKey;
 
@@ -155,11 +157,16 @@ async fn get_http_client(ctx: &Context<'_>) -> HttpClient {
 async fn query_track(ctx: &Context<'_>, query: String) -> Result<YoutubeDl, Error> {
     let client = get_http_client(ctx).await;
     let search = !query.starts_with("http") || query.contains(" ");
-    let src = if search {
+    let mut src = if search {
         YoutubeDl::new_search(client, query)
     } else {
         YoutubeDl::new(client, query)
     };
+    if CONFIG.get().unwrap().features.music_player.workarounds.ytdl_use_pot {
+        let string_args: Vec<String> = YTDL_POT_ARGS.to_vec().into_iter().map(|s| s.to_string()).collect();
+        string_args[1].replace("{port}", &CONFIG.get().unwrap().features.music_player.workarounds.ytdl_pot_server_port.to_string());
+        src = src.user_args(string_args);
+    }
     Ok(src)
 }
 
