@@ -442,6 +442,7 @@ pub async fn play(
     });
     trace!("Enqueueing track...");
     let song = handler.enqueue_input(src.into()).await;
+    trace!("Enqueued track, setting volume...");
     song.play().unwrap();
     song.set_volume(VOICE_CHAT_PROPERTIES.lock().await[&handler.current_channel().unwrap()].volume as f32 / 100.0).unwrap();
     let metadata = match metadata_task.await {

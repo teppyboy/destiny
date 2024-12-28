@@ -19,7 +19,7 @@ reqwest = "0.11.27"
 serde = { version = "1.0.216", features = ["derive"] }
 serenity = { version = "0.12.4", features = ["full"] }
 songbird = { version = "0.4.6", features = ["builtin-queue", "gateway", "serenity", "simd-json"] }
-symphonia = { version = "0.5.2", features = ["aac", "mp3", "isomp4", "alac"] }
+symphonia = { version = "0.5.4", features = ["aac", "mp3", "isomp4", "alac", "opt-simd"] }
 tokio = { version = "1.42.0", features = ["full"] }
 toml = "0.8.19"
 tracing = "0.1.41"
