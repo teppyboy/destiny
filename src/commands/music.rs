@@ -8,19 +8,27 @@ use serenity::prelude::TypeMapKey;
 use songbird::events::{Event, EventContext, EventHandler as VoiceEventHandler, TrackEvent};
 use songbird::input::{AuxMetadata, Compose, YoutubeDl};
 use songbird::{CoreEvent, Songbird};
+use tokio::task;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex;
 use tracing::{debug, error, trace};
 use uuid::Uuid;
 
+static HTTP_CLIENT: LazyLock<HttpClient> = LazyLock::new(|| HttpClient::new());
 static TRACK_METADATA: LazyLock<Mutex<HashMap<Uuid, AuxMetadata>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static VOICE_CHAT_PROPERTIES: LazyLock<Mutex<HashMap<songbird::id::ChannelId, VoiceChatProperties>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 const YTDL_POT_ARGS: [&str; 2] = [
     "--extractor-args",
     "youtube:getpot_bgutil_baseurl=http://127.0.0.1:{port}",
 ];
 const YTDL_COOKIES_ARGS: [&str; 2] = ["--cookies", "{path}"];
+
+struct VoiceChatProperties {
+    volume: i8,
+}
 
 pub struct HttpKey;
 
@@ -69,6 +77,7 @@ impl VoiceEventHandler for UserDisconnectedNotifier {
         if members.len() == 1 {
             let handler_lock = self.songbird.get(self.vc.guild_id).unwrap();
             let mut handler = handler_lock.lock().await;
+            VOICE_CHAT_PROPERTIES.lock().await.remove(&handler.current_channel().unwrap());
             handler.queue().stop();
             handler.remove_all_global_events();
             handler.leave().await.unwrap();
@@ -125,6 +134,10 @@ async fn join_vc(ctx: Context<'_>, manager: Arc<Songbird>) -> Result<ChannelId, 
     };
     if let Ok(handler_lock) = manager.join(guild_id, connect_to).await {
         let mut handler = handler_lock.lock().await;
+        VOICE_CHAT_PROPERTIES
+            .lock()
+            .await
+            .insert(connect_to.into(), VoiceChatProperties { volume: 100 });
         handler.add_global_event(
             Event::Core(CoreEvent::ClientDisconnect),
             UserDisconnectedNotifier {
@@ -183,15 +196,12 @@ async fn notify_if_not_vc(ctx: &Context<'_>, manager: &Arc<Songbird>) -> bool {
     false
 }
 
-async fn get_http_client(ctx: &Context<'_>) -> HttpClient {
-    let data = ctx.serenity_context().data.read().await;
-    data.get::<HttpKey>()
-        .cloned()
-        .expect("Guaranteed to exist in the typemap.")
+async fn get_http_client() -> HttpClient {
+    HTTP_CLIENT.clone()
 }
 
-async fn query_track(ctx: &Context<'_>, query: String) -> Result<YoutubeDl, Error> {
-    let client = get_http_client(ctx).await;
+async fn query_track(query: String) -> Result<YoutubeDl, Error> {
+    let client = get_http_client().await;
     let search = !query.starts_with("http") || query.contains(" ");
     let mut src = if search {
         YoutubeDl::new_search(client, query)
@@ -350,7 +360,7 @@ pub async fn resume(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// Play a track by url or query
+/// Plays a track by url or query
 #[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn play(
     ctx: Context<'_>,
@@ -385,42 +395,99 @@ pub async fn play(
             }
         }
     }
+    trace!("Querying track...");
+    let src: task::JoinHandle<Result<YoutubeDl, Error>> = task::spawn(async {
+        let src = match query_track(query).await {
+            Ok(src) => src,
+            Err(why) => {
+                return Err(why);
+            }
+        };
+        Ok(src)
+    });
     let handler_lock = manager.get(ctx.guild_id().unwrap()).unwrap();
     let mut handler = handler_lock.lock().await;
-    let mut src = match query_track(&ctx, query).await {
-        Ok(src) => src,
+    let src = match src.await {
+        Ok(src) => match src {
+            Ok(src) => src,
+            Err(why) => {
+                error!("Failed to get track: {:?}", why);
+                send_reply(
+                    &ctx,
+                    error_reply(
+                        Some(ctx.serenity_context()),
+                        format!("Failed to get track: {}", why),
+                        Some("Music".to_string()),
+                    )
+                    .await,
+                )
+                .await;
+                return Ok(());
+            }
+        },
         Err(why) => {
             error!("Failed to get track: {:?}", why);
-            send_reply(
-                &ctx,
-                error_reply(
-                    Some(ctx.serenity_context()),
-                    format!("Failed to get track: {}", why),
-                    Some("Music".to_string()),
-                )
-                .await,
-            )
-            .await;
             return Ok(());
         }
     };
-    let metadata = match src.aux_metadata().await {
-        Ok(meta) => meta,
+    trace!("Got track, fetching metadata...");
+    let src_meta = src.clone();
+    let metadata_task: task::JoinHandle<Result<AuxMetadata, songbird::input::AudioStreamError>> = task::spawn(async move {
+        match src_meta.clone().aux_metadata().await {
+            Ok(meta) => Ok(meta),
+            Err(why) => {
+                return Err(why);
+            }
+        }
+    });
+    trace!("Enqueueing track...");
+    let song = handler.enqueue_input(src.into()).await;
+    song.play().unwrap();
+    song.set_volume(VOICE_CHAT_PROPERTIES.lock().await[&handler.current_channel().unwrap()].volume as f32 / 100.0).unwrap();
+    let metadata = match metadata_task.await {
+        Ok(meta) => match meta {
+            Ok(meta) => meta,
+            Err(why) => {
+                error!("Failed to get metadata: {:?}", why);
+                send_reply(
+                    &ctx,
+                    error_reply(
+                        Some(ctx.serenity_context()),
+                        format!("Failed to get metadata: {}", why),
+                        Some("Music".to_string()),
+                    )
+                    .await,
+                )
+                .await;
+                return Ok(());
+            }
+        },
         Err(why) => {
-            send_reply(
-                &ctx,
-                error_reply(
-                    Some(ctx.serenity_context()),
-                    format!("Failed to get metadata: {}", why),
-                    Some("Music".to_string()),
-                )
-                .await,
-            )
-            .await;
+            error!("Failed to get metadata: {:?}", why);
             return Ok(());
         }
     };
-    let song = handler.enqueue_input(src.clone().into()).await;
+    trace!("Got metadata, adding events...");
+    let _ = song.add_event(Event::Track(TrackEvent::End), TrackEndNotifier);
+    let mut metadatas = TRACK_METADATA.lock().await;
+    metadatas.insert(song.uuid(), metadata.clone());
+    if handler.queue().len() == 1 {
+        send_reply(
+            &ctx,
+            info_reply(
+                Some(ctx.serenity_context()),
+                format!(
+                    "Playing track: [{}]({})",
+                    metadata.title.as_ref().unwrap(),
+                    metadata.source_url.as_ref().unwrap()
+                ),
+                Some("Music".to_string()),
+            )
+            .await,
+        )
+        .await;
+        return Ok(());
+    }
     let send_http = ctx.serenity_context().http.clone();
     let channel_id = ctx.channel_id();
     let _ = song.add_event(Event::Track(TrackEvent::Play), TrackStartNotifier {
@@ -428,12 +495,6 @@ pub async fn play(
         metadata: metadata.clone(),
         http: send_http,
     });
-    let _ = song.add_event(Event::Track(TrackEvent::End), TrackEndNotifier);
-    let mut metadatas = TRACK_METADATA.lock().await;
-    metadatas.insert(song.uuid(), metadata.clone());
-    if handler.queue().len() == 1 {
-        return Ok(());
-    }
     send_reply(
         &ctx,
         info_reply(
@@ -574,11 +635,78 @@ pub async fn stop(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Sets the volume of the current player
+#[poise::command(slash_command, prefix_command, guild_only)]
+pub async fn volume(
+    ctx: Context<'_>,
+    #[description = "The volume to set (0-100)"] volume: i8,
+) -> Result<(), Error> {
+    let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
+    if notify_if_not_vc(&ctx, &manager).await {
+        return Ok(());
+    }
+    let handler_lock = manager.get(ctx.guild_id().unwrap()).unwrap();
+    let handler = handler_lock.lock().await;
+    let track = match handler.queue().current() {
+        Some(track) => track,
+        None => {
+            send_reply(
+                &ctx,
+                error_reply(
+                    Some(ctx.serenity_context()),
+                    "No track is playing.".to_string(),
+                    Some("Music".to_string()),
+                )
+                .await,
+            )
+            .await;
+            return Ok(());
+        }
+    };
+    match track.set_volume(volume as f32 / 100.0) {
+        Ok(_) => {
+            send_reply(
+                &ctx,
+                info_reply(
+                    Some(ctx.serenity_context()),
+                    format!("Set volume to {}%.", volume),
+                    Some("Music".to_string()),
+                )
+                .await,
+            )
+            .await;
+        }
+        Err(why) => {
+            error!("Failed to set volume: {:?}", why);
+            send_reply(
+                &ctx,
+                error_reply(
+                    Some(ctx.serenity_context()),
+                    format!("Failed to set volume: {}", why),
+                    Some("Music".to_string()),
+                )
+                .await,
+            )
+            .await;
+        }
+    }
+    Ok(())
+}
+
 pub fn exports() -> Vec<
     poise::Command<
         crate::commands::Data,
         Box<(dyn serde::ser::StdError + std::marker::Send + Sync + 'static)>,
     >,
 > {
-    vec![join(), play(), pause(), resume(), queue(), skip(), stop()]
+    vec![
+        join(),
+        play(),
+        pause(),
+        resume(),
+        queue(),
+        skip(),
+        stop(),
+        volume(),
+    ]
 }
