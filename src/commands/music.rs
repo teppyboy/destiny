@@ -5,13 +5,15 @@ use reqwest::Client as HttpClient;
 use serenity::all::{Cache, ChannelId, GuildChannel, Http, Mentionable};
 use serenity::async_trait;
 use serenity::prelude::TypeMapKey;
+use songbird::error::TrackResult;
 use songbird::events::{Event, EventContext, EventHandler as VoiceEventHandler, TrackEvent};
 use songbird::input::{AuxMetadata, Compose, YoutubeDl};
-use songbird::{CoreEvent, Songbird};
+use songbird::tracks::TrackHandle;
+use songbird::{Call, CoreEvent, Songbird};
 use tokio::task;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 use tracing::{debug, error, trace};
 use uuid::Uuid;
 
@@ -196,6 +198,23 @@ async fn notify_if_not_vc(ctx: &Context<'_>, manager: &Arc<Songbird>) -> bool {
     false
 }
 
+async fn notify_if_empty_queue(ctx: &Context<'_>, handler: &MutexGuard<'_, Call>) -> Option<TrackHandle> {
+    if handler.queue().is_empty() {
+        send_reply(
+            &ctx,
+            error_reply(
+                Some(ctx.serenity_context()),
+                "No tracks are currently in queue.".to_string(),
+                Some("Music".to_string()),
+            )
+            .await,
+        )
+        .await;
+        return None;
+    }
+    handler.queue().current()
+}
+
 async fn get_http_client() -> HttpClient {
     HTTP_CLIENT.clone()
 }
@@ -279,6 +298,60 @@ pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
             .await;
         }
     };
+    Ok(())
+}
+
+/// Loops the current track
+#[poise::command(slash_command, prefix_command, guild_only, rename="loop")]
+pub async fn _loop(
+    ctx: Context<'_>,
+    #[description = "The amount of times to loop the track, 0 for infinite"]
+    times: Option<usize>,
+) -> Result<(), Error> {
+    let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
+    if notify_if_not_vc(&ctx, &manager).await {
+        return Ok(());
+    }
+    let handler_lock = manager.get(ctx.guild_id().unwrap()).unwrap();
+    let handler = handler_lock.lock().await;
+    let song = notify_if_empty_queue(&ctx, &handler).await;
+    if song.is_none() {
+        return Ok(());
+    }
+    let song = song.unwrap();
+    let result: TrackResult<()>;
+    if times.is_none() || times.unwrap() == 0 {
+        result = song.enable_loop();
+    } else {
+        result = song.loop_for(times.unwrap());
+    }
+    match result {
+        Ok(_) => {
+            send_reply(
+                &ctx,
+                info_reply(
+                    Some(ctx.serenity_context()),
+                    "Looped the current track.".to_string(),
+                    Some("Music".to_string()),
+                )
+                .await,
+            )
+            .await;
+        }
+        Err(why) => {
+            error!("Failed to loop track: {:?}", why);
+            send_reply(
+                &ctx,
+                error_reply(
+                    Some(ctx.serenity_context()),
+                    format!("Failed to loop track: {}", why),
+                    Some("Music".to_string()),
+                )
+                .await,
+            )
+            .await;
+        }
+    }
     Ok(())
 }
 
@@ -562,17 +635,8 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
     }
     let handler_lock = manager.get(ctx.guild_id().unwrap()).unwrap();
     let handler = handler_lock.lock().await;
-    if handler.queue().len() == 0 {
-        send_reply(
-            &ctx,
-            error_reply(
-                Some(ctx.serenity_context()),
-                "Not playing anything to skip.".to_string(),
-                Some("Music".to_string()),
-            )
-            .await,
-        )
-        .await;
+    let song = notify_if_empty_queue(&ctx, &handler).await;
+    if song.is_none() {
         return Ok(());
     }
     match handler.queue().skip() {
@@ -636,6 +700,52 @@ pub async fn stop(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Unloops the current track
+#[poise::command(slash_command, prefix_command, guild_only)]
+pub async fn unloop(
+    ctx: Context<'_>,
+) -> Result<(), Error> {
+    let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
+    if notify_if_not_vc(&ctx, &manager).await {
+        return Ok(());
+    }
+    let handler_lock = manager.get(ctx.guild_id().unwrap()).unwrap();
+    let handler = handler_lock.lock().await;
+    let song = notify_if_empty_queue(&ctx, &handler).await;
+    if song.is_none() {
+        return Ok(());
+    }
+    let song = song.unwrap();
+    match song.disable_loop() {
+        Ok(_) => {
+            send_reply(
+                &ctx,
+                info_reply(
+                    Some(ctx.serenity_context()),
+                    "Looped the current track.".to_string(),
+                    Some("Music".to_string()),
+                )
+                .await,
+            )
+            .await;
+        }
+        Err(why) => {
+            error!("Failed to loop track: {:?}", why);
+            send_reply(
+                &ctx,
+                error_reply(
+                    Some(ctx.serenity_context()),
+                    format!("Failed to loop track: {}", why),
+                    Some("Music".to_string()),
+                )
+                .await,
+            )
+            .await;
+        }
+    }
+    Ok(())
+}
+
 /// Sets the volume of the current player
 #[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn volume(
@@ -648,23 +758,12 @@ pub async fn volume(
     }
     let handler_lock = manager.get(ctx.guild_id().unwrap()).unwrap();
     let handler = handler_lock.lock().await;
-    let track = match handler.queue().current() {
-        Some(track) => track,
-        None => {
-            send_reply(
-                &ctx,
-                error_reply(
-                    Some(ctx.serenity_context()),
-                    "No track is playing.".to_string(),
-                    Some("Music".to_string()),
-                )
-                .await,
-            )
-            .await;
-            return Ok(());
-        }
-    };
-    match track.set_volume(volume as f32 / 100.0) {
+    let song = notify_if_empty_queue(&ctx, &handler).await;
+    if song.is_none() {
+        return Ok(());
+    }
+    let song = song.unwrap();
+    match song.set_volume(volume as f32 / 100.0) {
         Ok(_) => {
             send_reply(
                 &ctx,
@@ -702,12 +801,14 @@ pub fn exports() -> Vec<
 > {
     vec![
         join(),
+        _loop(),
         play(),
         pause(),
         resume(),
         queue(),
         skip(),
         stop(),
+        unloop(),
         volume(),
     ]
 }
