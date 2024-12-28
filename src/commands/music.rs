@@ -722,7 +722,7 @@ pub async fn unloop(
                 &ctx,
                 info_reply(
                     Some(ctx.serenity_context()),
-                    "Looped the current track.".to_string(),
+                    "Unlooped the current track.".to_string(),
                     Some("Music".to_string()),
                 )
                 .await,
@@ -730,12 +730,12 @@ pub async fn unloop(
             .await;
         }
         Err(why) => {
-            error!("Failed to loop track: {:?}", why);
+            error!("Failed to unloop track: {:?}", why);
             send_reply(
                 &ctx,
                 error_reply(
                     Some(ctx.serenity_context()),
-                    format!("Failed to loop track: {}", why),
+                    format!("Failed to unloop track: {}", why),
                     Some("Music".to_string()),
                 )
                 .await,
