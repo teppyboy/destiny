@@ -17,7 +17,6 @@ use tokio::sync::{Mutex, MutexGuard};
 use tracing::{debug, error, trace};
 use uuid::Uuid;
 
-static HTTP_CLIENT: LazyLock<HttpClient> = LazyLock::new(|| HttpClient::new());
 static TRACK_METADATA: LazyLock<Mutex<HashMap<Uuid, AuxMetadata>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static VOICE_CHAT_PROPERTIES: LazyLock<Mutex<HashMap<songbird::id::ChannelId, VoiceChatProperties>>> =
@@ -28,8 +27,18 @@ const YTDL_POT_ARGS: [&str; 2] = [
 ];
 const YTDL_COOKIES_ARGS: [&str; 2] = ["--cookies", "{path}"];
 
-struct VoiceChatProperties {
-    volume: i8,
+pub struct MusicData {
+    pub backend: MusicBackend,
+    pub http_client: HttpClient,
+}
+
+pub enum MusicBackend {
+    YoutubeDl,
+    Lavalink,
+}
+
+pub struct VoiceChatProperties {
+    volume: f32,
 }
 
 pub struct HttpKey;
@@ -139,7 +148,7 @@ async fn join_vc(ctx: Context<'_>, manager: Arc<Songbird>) -> Result<ChannelId, 
         VOICE_CHAT_PROPERTIES
             .lock()
             .await
-            .insert(connect_to.into(), VoiceChatProperties { volume: 100 });
+            .insert(connect_to.into(), VoiceChatProperties { volume: 100.0 });
         handler.add_global_event(
             Event::Core(CoreEvent::ClientDisconnect),
             UserDisconnectedNotifier {
@@ -215,12 +224,8 @@ async fn notify_if_empty_queue(ctx: &Context<'_>, handler: &MutexGuard<'_, Call>
     handler.queue().current()
 }
 
-async fn get_http_client() -> HttpClient {
-    HTTP_CLIENT.clone()
-}
-
-async fn query_track(query: String) -> Result<YoutubeDl, Error> {
-    let client = get_http_client().await;
+async fn ytdl_query_track(client: HttpClient, query: String) -> Result<YoutubeDl, Error> {
+    // let client = get_http_client().await;
     let search = !query.starts_with("http") || query.contains(" ");
     let mut src = if search {
         YoutubeDl::new_search(client, query)
@@ -469,8 +474,9 @@ pub async fn play(
         }
     }
     trace!("Querying track...");
+    let http_client = ctx.data().music_data.http_client.clone();
     let src: task::JoinHandle<Result<YoutubeDl, Error>> = task::spawn(async {
-        let src = match query_track(query).await {
+        let src = match ytdl_query_track(http_client, query).await {
             Ok(src) => src,
             Err(why) => {
                 return Err(why);
@@ -517,7 +523,7 @@ pub async fn play(
     let song = handler.enqueue_input(src.into()).await;
     trace!("Enqueued track, setting volume...");
     song.play().unwrap();
-    song.set_volume(VOICE_CHAT_PROPERTIES.lock().await[&handler.current_channel().unwrap()].volume as f32 / 100.0).unwrap();
+    song.set_volume(VOICE_CHAT_PROPERTIES.lock().await[&handler.current_channel().unwrap()].volume / 100.0).unwrap();
     let metadata = match metadata_task.await {
         Ok(meta) => match meta {
             Ok(meta) => meta,
@@ -750,7 +756,7 @@ pub async fn unloop(
 #[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn volume(
     ctx: Context<'_>,
-    #[description = "The volume to set (0-100)"] volume: i8,
+    #[description = "The volume to set (0-100)"] volume: f32,
 ) -> Result<(), Error> {
     let manager = songbird::get(ctx.serenity_context()).await.unwrap().clone();
     if notify_if_not_vc(&ctx, &manager).await {
@@ -763,8 +769,10 @@ pub async fn volume(
         return Ok(());
     }
     let song = song.unwrap();
-    match song.set_volume(volume as f32 / 100.0) {
+    match song.set_volume(volume / 100.0) {
         Ok(_) => {
+            let channel_id = &handler.current_channel().unwrap();
+            VOICE_CHAT_PROPERTIES.lock().await.get_mut(channel_id).unwrap().volume = volume;
             send_reply(
                 &ctx,
                 info_reply(

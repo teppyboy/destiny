@@ -3,7 +3,7 @@ use crate::{
     config::Config,
     utils::message::{info_reply, send_reply},
 };
-use commands::music::HttpKey;
+use commands::music::{HttpKey, MusicBackend};
 use dotenvy::dotenv;
 use reqwest::Client as HttpClient;
 use serenity::all::Ready;
@@ -54,6 +54,14 @@ async fn main() {
         false => None,
     };
     logging::setup(&log_level, log_file_name).expect("Failed to setup logging.");
+    let music_backend = match config.features.music_player.backend.as_str() {
+        "yt-dlp" => MusicBackend::YoutubeDl,
+        "lavalink" => MusicBackend::Lavalink,
+        _ => {
+            error!("Invalid music backend specified in config.");
+            return;
+        },
+    };
     CONFIG
         .set(config.clone())
         .expect("Failed to register config to global state.");
@@ -92,7 +100,12 @@ async fn main() {
         .setup(|ctx, _ready, framework| {
             Box::pin(async move {
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                Ok(commands::Data {})
+                Ok(commands::Data {
+                    music_data: commands::music::MusicData {
+                        backend: music_backend,
+                        http_client: HttpClient::new(),
+                    }
+                })
             })
         })
         .build();

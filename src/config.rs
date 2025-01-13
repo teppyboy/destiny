@@ -38,6 +38,7 @@ pub struct MusicPlayerWorkarounds {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MusicPlayer {
     pub enabled: bool,
+    pub backend: String,
     pub blacklist: List,
     pub whitelist: List,
     pub workarounds: MusicPlayerWorkarounds,
@@ -82,6 +83,7 @@ impl Config {
             features: Features {
                 music_player: MusicPlayer {
                     enabled: false,
+                    backend: "yt-dlp".to_string(),
                     blacklist: List {
                         enabled: false,
                         servers: vec![],
