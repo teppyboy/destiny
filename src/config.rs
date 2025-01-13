@@ -28,11 +28,29 @@ pub struct Feature {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct MusicPlayerWorkarounds {
-    pub ytdl_use_pot: bool,
-    pub ytdl_pot_server_port: u16,
-    pub ytdl_use_cookies: bool,
-    pub ytdl_cookies_path: String,
+pub struct YoutubeDlWorkarounds {
+    pub use_pot: bool,
+    pub pot_server_port: u16,
+    pub use_cookies: bool,
+    pub cookies_path: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct YoutubeDl {
+    pub workarounds: YoutubeDlWorkarounds,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LavalinkNode {
+    pub host: String,
+    pub port: u16,
+    pub password: String,
+    pub is_ssl: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Lavalink {
+    pub nodes: Vec<LavalinkNode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -41,7 +59,8 @@ pub struct MusicPlayer {
     pub backend: String,
     pub blacklist: List,
     pub whitelist: List,
-    pub workarounds: MusicPlayerWorkarounds,
+    pub lavalink: Lavalink,
+    pub ytdl: YoutubeDl,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -94,11 +113,16 @@ impl Config {
                         servers: vec![],
                         channels: vec![],
                     },
-                    workarounds: MusicPlayerWorkarounds {
-                        ytdl_use_pot: false,
-                        ytdl_pot_server_port: 58553,
-                        ytdl_use_cookies: false,
-                        ytdl_cookies_path: "cookies.txt".to_string(),
+                    lavalink: Lavalink {
+                        nodes: vec![],
+                    },
+                    ytdl: YoutubeDl {
+                        workarounds: YoutubeDlWorkarounds {
+                            use_pot: false,
+                            pot_server_port: 58553,
+                            use_cookies: false,
+                            cookies_path: "cookies.txt".to_string(),
+                        },
                     },
                 },
             },
