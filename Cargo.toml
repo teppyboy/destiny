@@ -23,5 +23,5 @@ symphonia = { version = "0.5.4", features = ["aac", "mp3", "isomp4", "alac", "op
 tokio = { version = "1.42.0", features = ["full"] }
 toml = "0.8.19"
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 uuid = "1.11.0"
